@@ -3,6 +3,10 @@ import {createReactAgent} from '@langchain/langgraph/prebuilt';
 import {RecursiveCharacterTextSplitter} from '@langchain/textsplitters' //chunk spliter
 import { OpenAIEmbeddings } from "@langchain/openai";
 import {Document} from '@langchain/core/documents'
+import { MemoryVectorStore } from "langchain/vectorstores/memory";
+import { tool } from "@langchain/core/tools";
+import {z} from 'zod'
+
 
 import data from './data.js'
 
@@ -25,41 +29,62 @@ const model = new ChatOpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-//creating the ReAct Agent
-const agent = createReactAgent({
-    llm: model,
-    tools: [],
-});
+
 
 //instantiating the OpenAI Embeddin model
 const embeddings = new OpenAIEmbeddings({
   model: "text-embedding-3-large"
 });
 
-//splitting the video into chunks
+//instantiate local memory
+const vectorStore = new MemoryVectorStore(embeddings);
+
+//defining the splitting 
 const splitter = new RecursiveCharacterTextSplitter({
     chunkSize: 1000,
     chunkOverlap: 200
 });
 
+//splitting into chunks
 const chunks = await splitter.splitDocuments(docs)
 
-console.log(chunks)
+//indexing
+await vectorStore.addDocuments(chunks)
 
-//embed the chunks
-
-
-
-
+//retrieve the most relevant chunks
+const retriever = await vectorStore.similaritySearch ('What was the finish time of Norris?', 1)
 
 
-// const result = await agent.invoke({
-//   messages: [
-//     {
-//       role: "user",
-//       content: "What is the capital of the Romania?",
-//     },
-//   ],
-// });
+//retrieveal tool
+const retrieveTool = tool( async ({query}) => {
+console.log('Retrieving docs for the quey--------------');
+//console.log(query)
 
-// console.log(result.messages.at(-1)?.content)
+const retrievedDocs = await vectorStore.similaritySearch(query, 3)
+const serializedDocs = retrievedDocs.map ((doc)=> doc.pageContent).join('\n');
+
+return serializedDocs;
+
+},
+{ //metadata dor the LLM
+    name: 'retrieve',
+    description: 'Retrieve the most relevant chunks of text from the transcript of a video',
+    schema: z.object({ //zos schema for the LLM
+        query: z.string()
+    })
+})
+
+//creating the ReAct Agent
+const agent = createReactAgent({
+    llm: model,
+    tools: [ retrieveTool],
+});
+
+const results =  await agent.invoke({
+    messages:[{
+        role: "user",
+        content: 'Who was 200 of a seconds away?'
+    }]
+})
+
+console.log(results)
